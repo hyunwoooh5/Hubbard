@@ -25,14 +25,18 @@ class Lattice:
         self.periodic_contour = True
 
     def idx(self, t, x0, x1):
-        return x1 + self.L*x0 + self.L*self.L*t
+        return (x1 % self.L) + self.L * (x0 % self.L) + self.L * self.L * (t % self.nt)
 
     def idx1(self, x0, x1):
-        return x1 + self.L*x0
+        return (x1 % self.L) + self.L * (x0 % self.L)
 
     def sites(self):
         # Return a list of all sites.
-        return jnp.indices((self.nt, self.V))
+        return jnp.indices((self.nt, self.L, self.L))
+
+    def spatial_sites(self):
+        # Return a list of spatial sites
+        return jnp.indices((self.L, self.L))
 
     def coords(self, i):
         t = i//self.L
@@ -52,9 +56,9 @@ class Hopping:
         a = Lattice(self.lattice.L, 1)
 
         for x1, y1, x2, y2 in product(range(size), range(size), range(size), range(size)):
-            if (x1 == x2 and (y1 == (y2+1) % size or y1 == (y2-1+size) % size)):
+            if (x1 == x2 and (y1 == (y2 + 1) % size or y1 == (y2 - 1 + size) % size)):
                 hop = hop.at[a.idx1(x1, y1), a.idx1(x2, y2)].add(1.0)
-            if (y1 == y2 and (x1 == (x2+1) % size or x1 == (x2-1+size) % size)):
+            if (y1 == y2 and (x1 == (x2 + 1) % size or x1 == (x2 - 1+size) % size)):
                 hop = hop.at[a.idx1(x1, y1), a.idx1(x2, y2)].add(1.0)
 
         return hop
@@ -94,8 +98,6 @@ class ImprovedModel:
         self.h2 = self.Hopping.exp_h2()
 
     def Hubbard1_old(self, A):
-        idx = self.lattice.idx
-        # A = A.reshape((self.lattice.nt, self.lattice.V))
         fer_mat1 = jnp.eye(self.lattice.V) + 0j
 
         for i in range(self.lattice.nt):
@@ -109,8 +111,6 @@ class ImprovedModel:
         return jnp.eye(self.lattice.V) + fer_mat1
 
     def Hubbard2_old(self, A):
-        idx = self.lattice.idx
-        # A = A.reshape((self.lattice.nt, self.lattice.V))
         fer_mat2 = jnp.eye(self.lattice.V) + 0j
 
         for i in range(self.lattice.nt):
@@ -124,8 +124,6 @@ class ImprovedModel:
         return jnp.eye(self.lattice.V) + fer_mat2
 
     def Hubbard1_new(self, A):
-        idx = self.lattice.idx
-#        A = A.reshape((self.lattice.nt, self.lattice.L, self.lattice.L))
         fer_mat1 = jnp.eye(self.lattice.V) + 0j
 
         def update_at_tx(t, x, H):
@@ -147,8 +145,6 @@ class ImprovedModel:
         return jnp.eye(self.lattice.V) + fer_mat1
 
     def Hubbard2_new(self, A):
-        idx = self.lattice.idx
-#        A = A.reshape((self.lattice.nt, self.lattice.L, self.lattice.L))
         fer_mat2 = jnp.eye(self.lattice.V) + 0j
 
         def update_at_tx(t, x, H):
@@ -176,12 +172,11 @@ class ImprovedModel:
         return self.Hubbard2_new(A)
 
     def action(self, A):
-        s, logdet = jnp.linalg.slogdet(self.Hubbard1(A) @ self.Hubbard2(A))
-        return -self.beta * jnp.sum(jnp.cos(A)) - jnp.log(s) - logdet
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard1(A))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard2(A))
+        return -self.beta * jnp.sum(jnp.cos(A)) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
     def density(self, A):
-        idx = self.lattice.idx
-        # A = A.reshape((self.lattice.nt, self.lattice.V))
 
         fer_mat1_inv = jnp.linalg.inv(self.Hubbard1(A))
         fer_mat2_inv = jnp.linalg.inv(self.Hubbard2(A))
@@ -278,6 +273,229 @@ class ImprovedModel:
             if (x1 == x2 and y1 == y2):
                 m += fer_mat1_inv(a, a) * fer_mat2_inv(a, a)
         '''
+        return m
+
+    def n1(self, A):
+        fer_mat1_inv = jnp.linalg.inv(self.Hubbard1(A))
+
+        return jnp.trace(fer_mat1_inv) / self.lattice.V
+
+    def n2(self, A):
+        fer_mat2_inv = jnp.linalg.inv(self.Hubbard2(A))
+
+        return jnp.trace(fer_mat2_inv) / self.lattice.V
+
+    def hamiltonian(self, A):
+        h = 0 + 0j
+        fer_mat1_inv = jnp.linalg.inv(self.Hubbard1(A))
+        fer_mat2_inv = jnp.linalg.inv(self.Hubbard2(A))
+
+        idx = self.lattice.idx1
+        size = self.lattice.L
+        A = A.reshape((self.lattice.nt, size, size))
+        x = jnp.array(range(size))
+
+        def update_at(x1, y1, x2, y2):
+            a = idx(x1, y1)
+            b = idx(x2, y2)
+
+            h = 0.5 * self.kappa * \
+                self.hopping[a, b] * (fer_mat1_inv[a, b] + fer_mat2_inv[a, b])
+
+            if (x1 == x2 and y1 == y2):
+                m += fer_mat1_inv[a, a] * fer_mat2_inv[a, a]
+
+            return h
+
+        h = jax.lax.fori_loop(0, size, lambda i, vx: vx + jax.lax.fori_loop(0, size,
+                                                                            lambda j, vy: vy + jax.lax.fori_loop(0, size,
+                                                                                                                 lambda k, vz: vz + jax.lax.fori_loop(0, size,
+                                                                                                                                                      lambda l, vw: vw + update_at(x[i], x[j], x[k], x[l]), h), h), h), h)
+
+        return h
+
+    def observe(self, A):
+        return jnp.array([self.density(A), self.doubleoccupancy(A)])
+
+    def all(self, A):
+        """
+        Returns:
+            Action and gradient
+        """
+        act, dact = jax.value_and_grad(self.action, holomorphic=True)(A+0j)
+        return act, dact
+
+
+@dataclass
+class ConventionalModel:
+    lattice: Lattice
+    beta: float
+    Kappa: float
+    U: float
+    Mu: float
+    dt: float
+
+    def __post_init__(self):
+        self.kappa = self.Kappa * self.dt
+        self.u = self.U * self.dt
+        self.mu = self.Mu * self.dt
+        self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
+
+        self.hopping = self.Hopping.hopping()
+
+    def Hubbard1(self, A):
+        idx = self.lattice.idx1
+        A = A.reshape((self.lattice.nt, self.lattice.L, self.lattice.L))
+        fer_mat1 = jnp.eye(self.lattice.V) + 0j
+
+        def update_at_tx(t, x1, x2, H):
+            H = H.at[idx(x1, x2), idx(x1, x2)].add(-1.0 + self.u /
+                                                   2.0 - self.mu - 1j * jnp.sin(A[t, x1, x2]))
+            H = H.at[idx(x1, x2), idx(x1 + 1, x2)].add(-self.kappa)
+            H = H.at[idx(x1, x2), idx(x1, x2 + 1)].add(-self.kappa)
+            H = H.at[idx(x1, x2), idx(x1 - 1, x2)].add(-self.kappa)
+            H = H.at[idx(x1, x2), idx(x1, x2 - 1)].add(-self.kappa)
+
+            return H
+
+        x0s, x1s = self.lattice.spatial_sites()
+        x0s = jnp.ravel(x0s)
+        x1s = jnp.ravel(x1s)
+
+        def update_at_ti(t, i, H):
+            return update_at_tx(t, x0s[i], x1s[i], H)
+
+        def update_at_t(t):
+            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
+            func = partial(update_at_ti, t)
+
+            temp_mat = jax.lax.fori_loop(0, len(x0s), func, temp_mat)
+            return temp_mat
+
+        def multi(t, fer_mat):
+            return update_at_t(t) @ fer_mat
+
+        fer_mat1 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat1)
+
+        return jnp.eye(self.lattice.V) + fer_mat1
+
+    def Hubbard2(self, A):
+        idx = self.lattice.idx1
+        A = A.reshape((self.lattice.nt, self.lattice.L, self.lattice.L))
+        fer_mat2 = jnp.eye(self.lattice.V) + 0j
+
+        def update_at_tx(t, x1, x2, H):
+            H = H.at[idx(x1, x2), idx(x1, x2)].add(-1.0 + self.u /
+                                                   2.0 - self.mu + 1j * jnp.sin(A[t, x1, x2]))
+            H = H.at[idx(x1, x2), idx(x1 + 1, x2)].add(-self.kappa)
+            H = H.at[idx(x1, x2), idx(x1, x2 + 1)].add(-self.kappa)
+            H = H.at[idx(x1, x2), idx(x1 - 1, x2)].add(-self.kappa)
+            H = H.at[idx(x1, x2), idx(x1, x2 - 1)].add(-self.kappa)
+
+            return H
+
+        x0s, x1s = self.lattice.spatial_sites()
+        x0s = jnp.ravel(x0s)
+        x1s = jnp.ravel(x1s)
+
+        def update_at_ti(t, i, H):
+            return update_at_tx(t, x0s[i], x1s[i], H)
+
+        def update_at_t(t):
+            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
+            func = partial(update_at_ti, t)
+
+            temp_mat = jax.lax.fori_loop(0, len(x0s), func, temp_mat)
+            return temp_mat
+
+        def multi(t, fer_mat):
+            return update_at_t(t) @ fer_mat
+
+        fer_mat2 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat2)
+
+        return jnp.eye(self.lattice.V) + fer_mat2
+
+    def action(self, A):
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard1(A))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard2(A))
+        return -self.beta * jnp.sum(jnp.cos(A)) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
+
+    def density(self, A):
+        idx = self.lattice.idx
+
+        fer_mat1_inv = jnp.linalg.inv(self.Hubbard1(A))
+        fer_mat2_inv = jnp.linalg.inv(self.Hubbard2(A))
+
+        return jnp.trace(fer_mat2_inv - fer_mat1_inv) / self.lattice.V
+
+    def doubleoccupancy(self, A):
+        d = 0 + 0j
+        fer_mat1_inv = jnp.linalg.inv(self.Hubbard1(A))
+        fer_mat2_inv = jnp.linalg.inv(self.Hubbard2(A))
+
+        def do(i, d):
+            return d + fer_mat2_inv[i, i] * (1.0 - fer_mat1_inv[i, i])
+
+        d = jax.lax.fori_loop(0, self.lattice.V, do, d) / self.lattice.V
+
+        return d
+
+    def staggered_magnetization(self, A):
+        m = 0 + 0j
+        fer_mat1_inv = jnp.linalg.inv(self.Hubbard1(A))
+        fer_mat2_inv = jnp.linalg.inv(self.Hubbard2(A))
+
+        idx = self.lattice.idx1
+        size = self.lattice.L
+        A = A.reshape((self.lattice.nt, size, size))
+        x = jnp.array(range(size))
+
+        def update_at(x1, y1, x2, y2):
+            a = idx(x1, y1)
+            b = idx(x2, y2)
+
+            m = - (-1.0)**(x1 + y1 + x2 + y2) * fer_mat1_inv[a, b] * \
+                fer_mat1_inv[b, a] + fer_mat2_inv[a, b] * fer_mat2_inv[b, a]
+
+            if (x1 == x2 and y1 == y2):
+                m += fer_mat1_inv[a, a] * fer_mat2_inv[a, a]
+
+            return m
+
+        m = jax.lax.fori_loop(0, size, lambda i, vx: vx + jax.lax.fori_loop(0, size,
+                                                                            lambda j, vy: vy + jax.lax.fori_loop(0, size,
+                                                                                                                 lambda k, vz: vz + jax.lax.fori_loop(0, size,
+                                                                                                                                                      lambda l, vw: vw + update_at(x[i], x[j], x[k], x[l]), m), m), m), m)
+
+        return m
+
+    def magnetization(self, A):
+        m = 0 + 0j
+        fer_mat1_inv = jnp.linalg.inv(self.Hubbard1(A))
+        fer_mat2_inv = jnp.linalg.inv(self.Hubbard2(A))
+
+        idx = self.lattice.idx1
+        size = self.lattice.L
+        A = A.reshape((self.lattice.nt, size, size))
+        x = jnp.array(range(size))
+
+        def update_at(x1, y1, x2, y2):
+            a = idx(x1, y1)
+            b = idx(x2, y2)
+
+            m = - fer_mat1_inv[a, b] * fer_mat1_inv[b, a] + \
+                fer_mat2_inv[a, b] * fer_mat2_inv[b, a]
+
+            if (x1 == x2 and y1 == y2):
+                m += fer_mat1_inv[a, a] * fer_mat2_inv[a, a]
+
+            return m
+
+        m = jax.lax.fori_loop(0, size, lambda i, vx: vx + jax.lax.fori_loop(0, size,
+                                                                            lambda j, vy: vy + jax.lax.fori_loop(0, size,
+                                                                                                                 lambda k, vz: vz + jax.lax.fori_loop(0, size,
+                                                                                                                                                      lambda l, vw: vw + update_at(x[i], x[j], x[k], x[l]), m), m), m), m)
+
         return m
 
     def n1(self, A):
