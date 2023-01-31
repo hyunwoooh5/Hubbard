@@ -24,11 +24,11 @@ class Lattice:
         self.dof = self.V * self.nt
         self.periodic_contour = True
 
-    def idx(self, t, x0, x1):
-        return (x1 % self.L) + self.L * (x0 % self.L) + self.L * self.L * (t % self.nt)
+    def idx(self, t, x1, x2):
+        return (x2 % self.L) + self.L * (x1 % self.L) + self.L * self.L * (t % self.nt)
 
-    def idx1(self, x0, x1):
-        return (x1 % self.L) + self.L * (x0 % self.L)
+    def idx1(self, x1, x2):
+        return (x2 % self.L) + self.L * (x1 % self.L)
 
     def sites(self):
         # Return a list of all sites.
@@ -343,6 +343,46 @@ class ConventionalModel:
 
         self.hopping = self.Hopping.hopping()
 
+    def Hubbard1_old(self, A):
+        idx = self.lattice.idx1
+        A = A.reshape((self.lattice.nt, self.lattice.L, self.lattice.L))
+        fer_mat1 = jnp.eye(self.lattice.V) + 0j
+        H = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
+
+        for t in range(self.lattice.nt):
+            for x1 in range(self.lattice.L):
+                for x2 in range(self.lattice.L):
+                    H = H.at[idx(x1, x2), idx(x1, x2)].set(-1.0 + self.u /
+                                                           2.0 - self.mu - 1j * jnp.sin(A[t, x1, x2]))
+                    H = H.at[idx(x1, x2), idx(x1 + 1, x2)].set(-self.kappa)
+                    H = H.at[idx(x1, x2), idx(x1, x2 + 1)].set(-self.kappa)
+                    H = H.at[idx(x1, x2), idx(x1 - 1, x2)].set(-self.kappa)
+                    H = H.at[idx(x1, x2), idx(x1, x2 - 1)].set(-self.kappa)
+
+            fer_mat1 = H @ fer_mat1
+
+        return jnp.eye(self.lattice.V) + fer_mat1
+
+    def Hubbard2_old(self, A):
+        idx = self.lattice.idx1
+        A = A.reshape((self.lattice.nt, self.lattice.L, self.lattice.L))
+        fer_mat2 = jnp.eye(self.lattice.V) + 0j
+        H = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
+
+        for t in range(self.lattice.nt):
+            for x1 in range(self.lattice.L):
+                for x2 in range(self.lattice.L):
+                    H = H.at[idx(x1, x2), idx(x1, x2)].set(-1.0 + self.u /
+                                                           2.0 - self.mu + 1j * jnp.sin(A[t, x1, x2]))
+                    H = H.at[idx(x1, x2), idx(x1 + 1, x2)].set(-self.kappa)
+                    H = H.at[idx(x1, x2), idx(x1, x2 + 1)].set(-self.kappa)
+                    H = H.at[idx(x1, x2), idx(x1 - 1, x2)].set(-self.kappa)
+                    H = H.at[idx(x1, x2), idx(x1, x2 - 1)].set(-self.kappa)
+
+            fer_mat2 = H @ fer_mat2
+
+        return jnp.eye(self.lattice.V) + fer_mat2
+
     def Hubbard1(self, A):
         idx = self.lattice.idx1
         A = A.reshape((self.lattice.nt, self.lattice.L, self.lattice.L))
@@ -358,18 +398,18 @@ class ConventionalModel:
 
             return H
 
-        x0s, x1s = self.lattice.spatial_sites()
-        x0s = jnp.ravel(x0s)
+        x1s, x2s = self.lattice.spatial_sites()
         x1s = jnp.ravel(x1s)
+        x2s = jnp.ravel(x2s)
 
         def update_at_ti(t, i, H):
-            return update_at_tx(t, x0s[i], x1s[i], H)
+            return update_at_tx(t, x1s[i], x2s[i], H)
 
         def update_at_t(t):
             temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
             func = partial(update_at_ti, t)
 
-            temp_mat = jax.lax.fori_loop(0, len(x0s), func, temp_mat)
+            temp_mat = jax.lax.fori_loop(0, len(x1s), func, temp_mat)
             return temp_mat
 
         def multi(t, fer_mat):
@@ -394,18 +434,18 @@ class ConventionalModel:
 
             return H
 
-        x0s, x1s = self.lattice.spatial_sites()
-        x0s = jnp.ravel(x0s)
+        x1s, x2s = self.lattice.spatial_sites()
         x1s = jnp.ravel(x1s)
+        x2s = jnp.ravel(x2s)
 
         def update_at_ti(t, i, H):
-            return update_at_tx(t, x0s[i], x1s[i], H)
+            return update_at_tx(t, x1s[i], x2s[i], H)
 
         def update_at_t(t):
             temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
             func = partial(update_at_ti, t)
 
-            temp_mat = jax.lax.fori_loop(0, len(x0s), func, temp_mat)
+            temp_mat = jax.lax.fori_loop(0, len(x1s), func, temp_mat)
             return temp_mat
 
         def multi(t, fer_mat):
