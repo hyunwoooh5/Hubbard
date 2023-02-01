@@ -4,6 +4,9 @@ from itertools import product
 from jax.scipy.linalg import expm
 from functools import partial
 
+import scipy.special as special
+from scipy.optimize import fsolve
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -81,7 +84,6 @@ class Hopping:
 @dataclass
 class ImprovedModel:
     lattice: Lattice
-    beta: float
     Kappa: float
     U: float
     Mu: float
@@ -91,11 +93,20 @@ class ImprovedModel:
         self.kappa = self.Kappa * self.dt
         self.u = self.U * self.dt
         self.mu = self.Mu * self.dt
-        self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
+        self.beta = self.BetaFunction()
 
+        self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
         self.hopping = self.Hopping.hopping()
         self.h1 = self.Hopping.exp_h1()
         self.h2 = self.Hopping.exp_h2()
+
+    def BetaFunction(self):
+        def fn(x):
+            return np.real(special.iv(0, np.sqrt((x + 0j)**2 - 1)) /
+                           special.iv(0, x + 0j)) - np.exp(-self.u/2)
+        betas = fsolve(fn, 1.0)
+
+        return betas[0]
 
     def Hubbard1_old(self, A):
         fer_mat1 = jnp.eye(self.lattice.V) + 0j
@@ -329,7 +340,6 @@ class ImprovedModel:
 @dataclass
 class ConventionalModel:
     lattice: Lattice
-    beta: float
     Kappa: float
     U: float
     Mu: float
@@ -339,9 +349,18 @@ class ConventionalModel:
         self.kappa = self.Kappa * self.dt
         self.u = self.U * self.dt
         self.mu = self.Mu * self.dt
-        self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
+        self.beta = self.BetaFunction()
 
+        self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
         self.hopping = self.Hopping.hopping()
+
+    def BetaFunction(self):
+        def fn(x):
+            return np.real(special.iv(1, x + 0j) / (x *
+                           special.iv(0, x + 0j))) - self.u
+        betas = fsolve(fn, 1.0)
+
+        return betas[0]
 
     def Hubbard1_old(self, A):
         idx = self.lattice.idx1
