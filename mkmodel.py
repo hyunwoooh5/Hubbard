@@ -20,11 +20,17 @@ subparsers = parser.add_subparsers(
 
 def mkhubbard(args):
     lattice = hubbard.Lattice(args.L, args.nt)
-    if args.conventional:
+    if args.disc == 'I':
+        model = hubbard.ImprovedModel(
+            lattice, args.Kappa, args.U, args.Mu, args.dt)
+    elif args.disc == 'C':
         model = hubbard.ConventionalModel(
             lattice, args.Kappa, args.U, args.Mu, args.dt)
-    else:
-        model = hubbard.ImprovedModel(
+    elif args.disc == 'IG':
+        model = hubbard.ImprovedGaussianModel(
+            lattice, args.Kappa, args.U, args.Mu, args.dt)
+    elif args.disc == 'IC':
+        model = hubbard.ConventionalGaussianModel(
             lattice, args.Kappa, args.U, args.Mu, args.dt)
 
     return model
@@ -37,9 +43,12 @@ parser_hubbard.add_argument('Kappa', type=float, help='hopping')
 parser_hubbard.add_argument('U', type=float, help='potential')
 parser_hubbard.add_argument('Mu', type=float, help='chemical potential')
 parser_hubbard.add_argument('dt', type=float, help='1/T=nt*dt')
-parser_hubbard.add_argument('--conventional', action='store_true',
-                            help='Use conventional action (default is improved)')
+parser_hubbard.add_argument('--disc', default='I', Choices=['I', 'C', 'IG', 'CG'],
+                            help='choice of discretization')
 parser_hubbard.set_defaults(func=mkhubbard)
+
+parser_sandbox = subparsers.add_parser('sandbox')
+parser_sandbox.set_defaults(func=mksandbox)
 
 args = parser.parse_args()
 model = args.func(args)
