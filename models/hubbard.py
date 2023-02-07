@@ -493,9 +493,12 @@ class ImprovedGaussianModel(ImprovedModel):
         self.kappa = self.Kappa * self.dt
         self.u = self.U * self.dt
         self.mu = self.Mu * self.dt
+        self.beta = self.BetaFunction()
 
         self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
         self.hopping = self.Hopping.hopping()
+        self.h1 = self.Hopping.exp_h1()
+        self.h2 = self.Hopping.exp_h2()
         self.lattice.periodic_contour = False
 
     def Hubbard1(self, A):
@@ -558,6 +561,7 @@ class ConventionalGaussianModel(ImprovedGaussianModel):
         self.kappa = self.Kappa * self.dt
         self.u = self.U * self.dt
         self.mu = self.Mu * self.dt
+        self.beta = self.BetaFunction()
 
         self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
         self.hopping = self.Hopping.hopping()

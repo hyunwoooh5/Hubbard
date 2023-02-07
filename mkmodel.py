@@ -43,12 +43,9 @@ parser_hubbard.add_argument('Kappa', type=float, help='hopping')
 parser_hubbard.add_argument('U', type=float, help='potential')
 parser_hubbard.add_argument('Mu', type=float, help='chemical potential')
 parser_hubbard.add_argument('dt', type=float, help='1/T=nt*dt')
-parser_hubbard.add_argument('--disc', default='I', Choices=['I', 'C', 'IG', 'CG'],
+parser_hubbard.add_argument('--disc', default='I', choices=['I', 'C', 'IG', 'CG'],
                             help='choice of discretization')
 parser_hubbard.set_defaults(func=mkhubbard)
-
-parser_sandbox = subparsers.add_parser('sandbox')
-parser_sandbox.set_defaults(func=mksandbox)
 
 args = parser.parse_args()
 model = args.func(args)
