@@ -10,9 +10,25 @@ class ReplicaExchange:
 
         loghbars = np.linspace(0,np.log(max_hbar),Nreplicas)
         hbars = np.exp(loghbars)
-        key, self.key = jax.random.split(key)
+        key, self.key = jax.random.split(key, 2)
         keys = jax.random.split(key, Nreplicas)
         self.replicas = [Chain(action, x0, key, temperature=hbar) for hbar,key in zip(hbars,keys)]
+
+        def _propose(key):
+            kswap, key = jax.random.split(key, 2)
+            kswapi, kswapj = jax.random.split(kswap, 2)
+            i=jax.random.randint(kswapi, shape=(), minval=0, maxval=self.Nreplicas)
+            j=jax.random.randint(kswapj, shape=(), minval=0, maxval=self.Nreplicas)
+            
+            return i, j, key
+
+        def _propose2(key):
+            kacc, key = jax.random.split(key, 2)
+            x = jax.random.uniform(kacc)
+            return x
+
+        self._propose=jax.jit(_propose)
+        self._propose2=jax.jit(_propose2)
 
     def step(self, N=1):
         for n in range(N):
@@ -25,10 +41,7 @@ class ReplicaExchange:
         if self.Nreplicas == 1:
             return
         for _ in range(self.Nreplicas):
-            kswap, kacc, self.key = jax.random.split(self.key, 3)
-            kswapi, kswapj = jax.random.split(kswap)
-            i = jax.random.randint(kswapi, shape=(), minval=0, maxval=self.Nreplicas)
-            j = jax.random.randint(kswapj, shape=(), minval=0, maxval=self.Nreplicas)
+            i, j, self.key = self._propose(self.key)
             if i == j:
                 continue
             hbari, hbarj = self.replicas[i].temperature, self.replicas[j].temperature
@@ -36,7 +49,7 @@ class ReplicaExchange:
             S = Si/hbari + Sj/hbarj
             Sp = Sj/hbari + Si/hbarj
             Sdiff = Sp - S
-            if Sdiff < 0 or jax.random.uniform(kacc) < np.exp(-Sdiff):
+            if Sdiff < 0 or self._propose2(self.key) < np.exp(-Sdiff):
                 self._swap(i,j)
 
     def _swap(self, i, j):
