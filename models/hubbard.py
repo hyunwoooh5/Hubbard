@@ -1024,8 +1024,17 @@ class ImprovedGaussianSpinModel(ImprovedModel):
 
         self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
         self.hopping = self.Hopping.hopping()
-        self.h1 = self.Hopping.exp_h1()
-        self.h2 = self.Hopping.exp_h2()
+
+        self.h1 = self.kappa * self.hopping
+        for i in range(self.lattice.L**2):
+            self.h1 = self.h1.at[i, i].add(self.mu-self.u)
+        self.h1 = expm(self.h1)
+
+        self.h2 = self.kappa * self.hopping
+        for i in range(self.lattice.L**2):
+            self.h2 = self.h2.at[i, i].add(-self.mu-self.u)
+        self.h2 = expm(self.h2)
+
         self.dof = self.lattice.dof
 
         self.periodic_contour = False
@@ -1035,7 +1044,7 @@ class ImprovedGaussianSpinModel(ImprovedModel):
 
         def update_at_tx(t, x, H):
             H = H.at[x, x].add(
-                jnp.exp(A[t * self.lattice.V + x]) - self.u/2)
+                jnp.exp(A[t * self.lattice.V + x]))
             return H
 
         def update_at_t(t):
@@ -1056,7 +1065,7 @@ class ImprovedGaussianSpinModel(ImprovedModel):
 
         def update_at_tx(t, x, H):
             H = H.at[x, x].add(
-                jnp.exp(A[t * self.lattice.V + x]) - self.u/2)
+                jnp.exp(A[t * self.lattice.V + x]))
             return H
 
         def update_at_t(t):
