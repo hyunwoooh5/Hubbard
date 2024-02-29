@@ -1,26 +1,27 @@
 import jax
 import jax.numpy as jnp
 
+
 class Chain:
     def __init__(self, action, x0, key, delta=1., temperature=1.):
         self.action = action
         self.x = x0
         self.S = self.action(self.x)
         self.delta = delta
-        self.temperature = 1.
+        self.temperature = temperature
         self._key = key
         self._recent = [False]
 
         def _propose(key, x, delta):
             kstep, key = jax.random.split(key, 2)
             xp = x + delta*jax.random.normal(kstep, x.shape)
-            
+
             return xp
-         
-        def _acceptreject(key, x, delta, S, xp, Sp):
+
+        def _acceptreject(key, temperature, x, S, xp, Sp):
             key, kacc = jax.random.split(key, 2)
             Sdiff = Sp - S
-		
+
             def accept():
                 return xp, Sp, True
 
@@ -28,10 +29,10 @@ class Chain:
                 return x, S, False
 
             acc = jax.random.uniform(kacc) < jnp.exp(-Sdiff/temperature)
-            x, S, accepted = jax.lax.cond(acc,accept,reject)
+            x, S, accepted = jax.lax.cond(acc, accept, reject)
 
             return key, x, S, accepted
-	
+
         self._propose = jax.jit(_propose)
         self._acceptreject = jax.jit(_acceptreject)
 
@@ -44,7 +45,8 @@ class Chain:
         self.S = self.action(self.x).real
         for _ in range(N):
             xp, Sp = self._action(self._key, self.x, self.delta)
-            self._key, self.x, self.S, accepted = self._acceptreject(self._key, self.x, self.delta, self.S, xp, Sp)
+            self._key, self.x, self.S, accepted = self._acceptreject(
+                self._key, self.temperature, self.x, self.S, xp, Sp)
             self._recent.append(accepted)
         self._recent = self._recent[-100:]
 
@@ -65,4 +67,3 @@ class Chain:
         while True:
             self.step(N=skip)
             yield self.x
-

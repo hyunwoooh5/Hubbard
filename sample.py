@@ -2,8 +2,7 @@
 
 from models import hubbard
 from mc import metropolis, replica
-from contour import PeriodicContour, RealContour, Contour, AffineContour, NearestNeighborAffineContour, PeriodicAffineContour
-
+from contour import *
 import argparse
 import itertools
 import pickle
@@ -64,13 +63,16 @@ skip = args.skip
 if args.skip == 30:
     skip = V
 
-if type(contour) == AffineContour or type(contour) == NearestNeighborAffineContour or type(contour) == PeriodicAffineContour:
+if type(contour) == RealContour:
     @jax.jit
     def Seff(x, p):
-        j = jax.jacfwd(lambda y: contour.apply(p, y))(x)
-        logdet = jnp.log(j.diagonal().prod())
+        return model.action(x)
+
+elif type(contour) == ConstantShift:
+    @jax.jit
+    def Seff(x, p):
         xt = contour.apply(p, x)
-        Seff = model.action(xt) - logdet
+        Seff = model.action(xt)
         return Seff
 
 else:
@@ -92,10 +94,10 @@ def observe(x, p):
 
 if args.replica:
     chain = replica.ReplicaExchange(lambda x: Seff(x, contour_params), jnp.zeros(
-        V), chain_key, max_hbar=args.max_hbar, Nreplicas=args.nreplicas)
+        V), chain_key, delta=1./jnp.sqrt(V), max_hbar=args.max_hbar, Nreplicas=args.nreplicas)
 else:
     chain = metropolis.Chain(lambda x: Seff(
-        x, contour_params), jnp.zeros(V), chain_key)
+        x, contour_params), jnp.zeros(V), chain_key, delta=1./jnp.sqrt(V))
 chain.calibrate()
 chain.step(N=args.thermalize*V)
 chain.calibrate()

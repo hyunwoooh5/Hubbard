@@ -1,14 +1,12 @@
 #!/usr/bin/env python
 
-# S-K for the anharmonic oscillator, in 0+1
-
 from models import hubbard
 from mc import metropolis, replica
-
 import pickle
 import sys
 import time
 from typing import Callable, Sequence
+from util import *
 
 import flax
 import flax.linen as nn
@@ -25,7 +23,7 @@ jax.config.update("jax_debug_infs", True)
 class MLP(nn.Module):
     features: Sequence[int]
     kernel_init: Callable = nn.initializers.variance_scaling(
-        1e-5, "fan_in", "truncated_normal")
+        2e-0, "fan_in", "truncated_normal")
     bias_init: Callable = nn.initializers.zeros
 
     @nn.compact
@@ -37,6 +35,15 @@ class MLP(nn.Module):
         return x
 
 
+class ConstantShift(nn.Module):
+    volume: int
+
+    @nn.compact
+    def __call__(self, x):
+        bias = self.param('bias', nn.initializers.zeros, (self.volume,))
+        return x + 1j*bias
+
+
 class Contour(nn.Module):
     volume: int
     features: Sequence[int]
@@ -45,13 +52,12 @@ class Contour(nn.Module):
     def __call__(self, x):
         V = self.volume
         zeroinit = nn.initializers.zeros
-        # u = MLP(self.features)(x)
+        u = MLP(self.features)(x)
         v = MLP(self.features)(x)
         # Start from real plane
-        # y_r = nn.Dense(V, kernel_init=zeroinit, bias_init=zeroinit)(u)
+        y_r = nn.Dense(V, kernel_init=zeroinit, bias_init=zeroinit)(u)
         y_i = nn.Dense(V, kernel_init=zeroinit, bias_init=zeroinit)(v)
-        y_i = 2.0 * (nn.sigmoid(y_i) - 0.5)  # boundary
-        return x + 1j*y_i
+        return x + y_r + 1j*y_i
 
 
 class PeriodicContour(nn.Module):
@@ -69,119 +75,12 @@ class PeriodicContour(nn.Module):
         V = self.volume
         xs = jnp.concatenate(ftns, axis=-1)
         zeroinit = nn.initializers.zeros
-        # u = MLP(self.features)(xs)
+        u = MLP(self.features)(xs)
         v = MLP(self.features)(xs)
-        # y_r = nn.Dense(V, kernel_init=zeroinit, bias_init=zeroinit)(u)
+        y_r = nn.Dense(V, kernel_init=zeroinit, bias_init=zeroinit)(u)
         y_i = nn.Dense(V, kernel_init=zeroinit, bias_init=zeroinit)(v)
-        y_i = 2.0 * (nn.sigmoid(y_i) - 0.5)  # boundary
-        return x + 1j*y_i
 
-
-class AffineContour(nn.Module):
-    volume: int
-    features: Sequence[int]
-    even_indices: jnp.ndarray
-    odd_indices: jnp.ndarray
-
-    def NewArray(self, aux, n):
-        return aux[n]
-
-    @nn.compact
-    def __call__(self, x):
-        zeroinit = nn.initializers.zeros
-        split = jax.tree_util.Partial(self.NewArray, x)
-        x_even = jax.lax.map(split, self.even_indices)
-        u_even = MLP(self.features)(x_even)
-        v_even = MLP(self.features)(x_even)
-
-        u_s = nn.Dense(1, kernel_init=zeroinit, bias_init=zeroinit)(u_even)
-        u_t = nn.Dense(1, kernel_init=zeroinit, bias_init=zeroinit)(v_even)
-
-        y = x+0j
-
-        def update_at_i(i, z):
-            z = z.at[self.odd_indices[i]].add(
-                1j*(u_s[0] * x[self.odd_indices[i]] + u_t[0]))
-            return z
-
-        y = jax.lax.fori_loop(0, self.volume // 2, update_at_i, y)
-
-        return y
-
-
-class PeriodicAffineContour(nn.Module):
-    volume: int
-    features: Sequence[int]
-    width: int
-    even_indices: jnp.ndarray
-    odd_indices: jnp.ndarray
-
-    def NewArray(self, aux, n):
-        return aux[n]
-
-    @nn.compact
-    def __call__(self, x):
-        zeroinit = nn.initializers.zeros
-        split = jax.tree_util.Partial(self.NewArray, x)
-        x_even = jax.lax.map(split, self.even_indices)
-
-        ftns = []
-        for i in range(1, self.width+1):
-            ftns.append(jnp.cos(i*x_even))
-            ftns.append(jnp.sin(i*x_even))
-
-        xs = jnp.concatenate(ftns, axis=-1)
-
-        u_even = MLP(self.features)(xs)
-        v_even = MLP(self.features)(xs)
-
-        u_s = nn.Dense(1, kernel_init=zeroinit, bias_init=zeroinit)(u_even)
-        u_t = nn.Dense(1, kernel_init=zeroinit, bias_init=zeroinit)(v_even)
-
-        y = x+0j
-
-        def update_at_i(i, z):
-            z = z.at[self.odd_indices[i]].add(
-                1j*(u_s[0] * x[self.odd_indices[i]] + u_t[0]))
-            return z
-
-        y = jax.lax.fori_loop(0, self.volume // 2, update_at_i, y)
-
-        return y
-
-
-class NearestNeighborAffineContour(nn.Module):
-    volume: int
-    features: Sequence[int]
-    even_indices: jnp.ndarray
-    odd_indices: jnp.ndarray
-    indftn: Callable[[int], jnp.ndarray]
-
-    def NewArray(self, aux, n):
-        return aux[n]
-
-    @nn.compact
-    def __call__(self, x):
-        zeroinit = nn.initializers.zeros
-        split = jax.tree_util.Partial(self.NewArray, x)
-
-        y = x+0j
-
-        def update_at_i(i, z):
-            nn = self.indftn(self.even_indices[i])
-            x_nn = jax.lax.map(split, nn)
-            u_nn = MLP(self.features)(x_nn)
-            v_nn = MLP(self.features)(x_nn)
-
-            u_s = nn.Dense(1, kernel_init=zeroinit, bias_init=zeroinit)(u_nn)
-            u_t = nn.Dense(1, kernel_init=zeroinit, bias_init=zeroinit)(v_nn)
-            z = z.at[self.odd_indices[i]].add(
-                1j*(u_s[0] * z[self.odd_indices[i]] + u_t[0]))
-            return z
-
-        y = jax.lax.fori_loop(0, self.volume // 2, update_at_i, y)
-
-        return y
+        return x + y_r + 1j*y_i
 
 
 class RealContour(nn.Module):
@@ -199,6 +98,8 @@ if __name__ == '__main__':
     parser.add_argument('contour', type=str, help="contour filename")
     parser.add_argument('-R', '--real', action='store_true',
                         help="output the real plane")
+    parser.add_argument('-c', '--constant', action='store_true',
+                        help="constant shift")
     parser.add_argument('-i', '--init', action='store_true',
                         help="re-initialize even if contour already exists")
     parser.add_argument('-f', '--from', dest='fromfile',
@@ -242,6 +143,8 @@ if __name__ == '__main__':
                         help="b2 parameter for adam")
     parser.add_argument(
         '--weight', type=str, default='jnp.ones(len(grads))', help="weight for gradients")
+    parser.add_argument('--dp', action='store_true',
+                        help="turn on double precision")
 
     args = parser.parse_args()
 
@@ -249,6 +152,9 @@ if __name__ == '__main__':
     if args.seed_time:
         seed = time.time_ns()
     key = jax.random.PRNGKey(seed)
+
+    if args.dp:
+        jax.config.update('jax_enable_x64', True)
 
     with open(args.model, 'rb') as f:
         model = eval(f.read())
@@ -268,6 +174,13 @@ if __name__ == '__main__':
             logdet = jnp.log(j.diagonal().prod())
             xt = contour.apply(p, x)
             Seff = model.action(xt) - logdet
+            return Seff
+
+    elif args.constant:
+        @jax.jit
+        def Seff(x, p):
+            xt = contour.apply(p, x)
+            Seff = model.action(xt)
             return Seff
 
     else:
@@ -306,38 +219,33 @@ if __name__ == '__main__':
         loaded = True
     if not loaded:
         if model.periodic_contour:
-            if args.affine:
-                contour = PeriodicAffineContour(
-                    V, [args.width*V] * args.layers, args.width, even_indices, odd_indices)
+            if args.constant:
+                contour = ConstantShift(V)
             else:
                 contour = PeriodicContour(
-                    V, [args.width*V] * args.layers, args.width)
+                    V, [args.width] * args.layers, args.width)
         else:
-            if args.affine:
-                contour = AffineContour(
-                    V, [args.width*V] * args.layers, even_indices, odd_indices)
-            elif args.nnaffine:
-                contour = NearestNeighborAffineContour(
-                    V, [args.width*4] * args.layers, even_indices, odd_indices, indftn)
+            if args.constant:
+                contour = ConstantShift(V)
             else:
-                contour = Contour(V, [args.width*V]*args.layers)
+                contour = Contour(V, [args.width]*args.layers)
         contour_params = contour.init(contour_ikey, jnp.zeros(V))
     # setup metropolis
     if args.replica:
         chain = replica.ReplicaExchange(lambda x: Seff(x, contour_params), jnp.zeros(
-            V), chain_key, max_hbar=args.max_hbar, Nreplicas=args.nreplicas)
+            V), chain_key, delta=1./jnp.sqrt(V), max_hbar=args.max_hbar, Nreplicas=args.nreplicas)
     else:
         chain = metropolis.Chain(lambda x: Seff(
-            x, contour_params).real, jnp.zeros(V), chain_key)
+            x, contour_params).real, jnp.zeros(V), chain_key, delta=1./jnp.sqrt(V))
 
     Seff_grad = jax.jit(jax.grad(lambda y, p: -Seff(y, p).real, argnums=1))
 
     if args.schedule:
         sched = optax.exponential_decay(
             init_value=args.learningrate,
-            transition_steps=int(args.care*1000),
+            transition_steps=int(args.care),
             decay_rate=0.99,
-            end_value=2e-5)
+            end_value=1e-6)
     else:
         sched = optax.constant_schedule(args.learningrate)
     opt = getattr(optax, args.optimizer)(sched, args.b1, args.b2)
@@ -348,47 +256,13 @@ if __name__ == '__main__':
         with open(args.contour, 'wb') as f:
             pickle.dump((contour, contour_params), f)
 
-    def Grad_Mean(grads, weight):
-        """
-        Params:
-            grads: Gradients
-            weight: Weights
-        """
-        grads_w = [jax.tree_util.tree_map(
-            lambda x: w*x, g) for w, g in zip(weight, grads)]
-        w_mean = jnp.mean(weight)
-        grad_mean = jax.tree_util.tree_map(
-            lambda *x: jnp.mean(jnp.array(x), axis=0)/w_mean, *grads_w)
-        return grad_mean
-
-    def bootstrap(xs, ws=None, N=100, Bs=50):
-        if Bs > len(xs):
-            Bs = len(xs)
-        B = len(xs)//Bs
-        if ws is None:
-            ws = xs*0 + 1
-        # Block
-        x, w = [], []
-        for i in range(Bs):
-            x.append(sum(xs[i*B:i*B+B]*ws[i*B:i*B+B])/sum(ws[i*B:i*B+B]))
-            w.append(sum(ws[i*B:i*B+B]))
-        x = np.array(x)
-        w = np.array(w)
-        # Regular bootstrap
-        y = x * w
-        m = (sum(y) / sum(w))
-        ms = []
-        for _ in range(N):
-            s = np.random.choice(range(len(x)), len(x))
-            ms.append((sum(y[s]) / sum(w[s])))
-        ms = np.array(ms)
-        return m, np.std(ms.real) + 1j*np.std(ms.imag)
-
-    steps = int(10000 / args.nstochastic)
-    phases = [0] * steps * args.nstochastic
-    acts = [0] * steps * args.nstochastic
+    steps = int(1000 / args.nstochastic)
     grads = [0] * args.nstochastic
     weight = eval(args.weight)
+
+    # measurement
+    phases = [0] * steps * args.nstochastic
+    acts = [0] * steps * args.nstochastic
 
     chain.calibrate()
     chain.step(N=args.thermalize*V)
@@ -399,28 +273,22 @@ if __name__ == '__main__':
                 for l in range(args.nstochastic):
                     chain.step(N=skip)
                     grads[l] = Seff_grad(chain.x, contour_params)
-                    acts[s*args.nstochastic+l] = Seff(chain.x, contour_params)
-                    phases[s*args.nstochastic +
-                           l] = jnp.exp(-1j*acts[s*args.nstochastic+l].imag)
+
                 grad = Grad_Mean(grads, weight)
                 updates, opt_state = opt_update_jit(grad, opt_state)
                 contour_params = optax.apply_updates(contour_params, updates)
 
             # tracking the size of gradient
-            grad_abs = 0.
-            for i in range(1):
-                grad_abs += np.linalg.norm(grad['params']
-                                           ['Dense_'+str(i)]['kernel'])
-                grad_abs += np.linalg.norm(grad['params']
-                                           ['Dense_'+str(i)]['bias'])
+            grad_square = sum((w**2).sum()
+                              for w in jax.tree_util.tree_leaves(grad["params"]))
 
-                for j in range(args.layers):
-                    grad_abs += np.linalg.norm(grad['params']
-                                               ['MLP_'+str(i)]['Dense_'+str(j)]['kernel'])
-                    grad_abs += np.linalg.norm(grad['params']
-                                               ['MLP_'+str(i)]['Dense_'+str(j)]['bias'])
+            # measurement once in a while
+            for i in range(len(phases)):
+                chain.step(N=skip)
+                acts[i] = Seff(chain.x, contour_params)
+                phases[i] = jnp.exp(-1j*acts[i].imag)
 
-            print(f'{np.mean(phases).real} {np.abs(np.mean(phases))} {bootstrap(np.array(phases))} ({np.mean(np.abs(chain.x))} {np.real(np.mean(acts))} {np.mean(acts)} {grad_abs} {chain.acceptance_rate()})', flush=True)
+            print(f'{np.mean(phases).real} {np.abs(np.mean(phases))} {jackknife(np.array(phases))} ({np.mean(np.abs(chain.x))} {np.real(np.mean(acts))} {np.mean(acts)} {grad_square} {chain.acceptance_rate()})', flush=True)
 
             save()
 
