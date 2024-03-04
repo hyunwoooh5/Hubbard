@@ -1,4 +1,4 @@
-# Hubbard Model for contour deformation
+# Contour deformation for Hubbard MOdel
 
 
 ## Workflow
@@ -22,4 +22,11 @@ Here is an example:
 ./contour.py model.dat c.pickle -l 1 -w 1 -lr 1e-3 # Terminate with CTRL-C
 ./sample.py model.dat c.pickle -N 1000 > sam.dat \&
 ./bootstrap.py < sam.dat
+```
+
+To compare it with the real-plane Monte Carlo, generate the real plane contour and sample it:
+```
+./contour.py model.dat c_real.pickle -R
+./sample.py model.dat c_real.pickle -N 1000 > sam_real.dat \&
+./bootstrap < sam_real.dat
 ```
