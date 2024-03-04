@@ -144,6 +144,11 @@ class ImprovedModel:
             M = self.h[spin] @ jnp.diag(jnp.exp(1j*spin*jnp.sin(Ab[t, i]))) @ M
         return jnp.identity(self.L*self.L) + M
 
+    def action(self, A):
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
+        return -self.beta * jnp.sum(jnp.cos(A)) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
+
     # Error: Singular value decomposition JVP not implemented for full matrices
     # https://github.com/google/jax/issues/2011
     def svd_mult(self, A, B):  # fact_mult
@@ -211,11 +216,6 @@ class ImprovedModel:
         final_v = final_svd[2] @ fer_mat2[2]
 
         return final_u, final_d, final_v
-
-    def action(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
-        return -self.beta * jnp.sum(jnp.cos(A)) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
     def action_svd(self, A):
         u1, d1, v1 = self.Hubbard1_svd(A)
@@ -403,51 +403,18 @@ class ImprovedModel2(ImprovedModel):
 
         return float(betas[0])
 
-    def Hubbard1(self, A):
-        fer_mat1 = jnp.eye(self.lattice.V) + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(1j * jnp.sin(A[t * self.lattice.V + x]) + self.mu))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h1 @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat1 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat1)
-
-        return jnp.eye(self.lattice.V) + fer_mat1
-
-    def Hubbard2(self, A):
-        fer_mat2 = jnp.eye(self.lattice.V) + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(-1j * jnp.sin(A[t * self.lattice.V + x]) - self.mu))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat2 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat2)
-
-        return jnp.eye(self.lattice.V) + fer_mat2
+    def Hubbard(self, A, spin=1):
+        M = jnp.identity(self.L*self.L) + 0j
+        Ab = A.reshape((self.nt, self.L*self.L))
+        for t in range(self.nt):
+            i, _ = jnp.diag_indices_from(M)
+            M = self.h @ jnp.diag(jnp.exp(spin*(1j *
+                                  jnp.sin(Ab[t, i]) + self.mu))) @ M
+        return jnp.identity(self.L*self.L) + M
 
     def action(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard1(A))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard2(A))
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
         return -self.beta * jnp.sum(jnp.cos(A)) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
 
@@ -622,57 +589,27 @@ class ImprovedGaussianModel(ImprovedModel):
 
         self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
         self.hopping = self.Hopping.hopping()
-        self.h1 = self.Hopping.exp_h1()
-        self.h2 = self.Hopping.exp_h2()
+        self.h = {1: self.Hopping.exp_h1(), -1: self.Hopping.exp_h2()}
 
-        self.h1_svd = jnp.linalg.svd(self.h1)
-        self.h2_svd = jnp.linalg.svd(self.h2)
+        self.h1_svd = jnp.linalg.svd(self.h[1])
+        self.h2_svd = jnp.linalg.svd(self.h[-1])
 
         self.dof = self.lattice.dof
 
         self.periodic_contour = False
 
-    def Hubbard1(self, A):
-        fer_mat1 = jnp.eye(self.lattice.V) + 0j
+    def Hubbard(self, A, spin=1):
+        M = jnp.identity(self.L*self.L) + 0j
+        Ab = A.reshape((self.nt, self.L*self.L))
+        for t in range(self.nt):
+            i, _ = jnp.diag_indices_from(M)
+            M = self.h[spin] @ jnp.diag(jnp.exp(1j*spin*Ab[t, i])) @ M
+        return jnp.identity(self.L*self.L) + M
 
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(1j * A[t * self.lattice.V + x]))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h1 @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat1 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat1)
-
-        return jnp.eye(self.lattice.V) + fer_mat1
-
-    def Hubbard2(self, A):
-        fer_mat2 = jnp.eye(self.lattice.V) + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(-1j * A[t * self.lattice.V + x]))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h2 @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat2 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat2)
-
-        return jnp.eye(self.lattice.V) + fer_mat2
+    def action(self, A):
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
+        return jnp.sum(A ** 2) / (2 * self.u) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
     def Hubbard1_svd(self, A):
         fer_mat1 = (jnp.eye(self.lattice.V) + 0j,
@@ -732,11 +669,6 @@ class ImprovedGaussianModel(ImprovedModel):
 
         return final_u, final_d, final_v
 
-    def action_naive(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard1(A))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard2(A))
-        return jnp.sum(A ** 2) / (2 * self.u) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
-
     def action_svd(self, A):
         u1, d1, v1 = self.Hubbard1_svd(A)
         u1_s, u1_logdet = jnp.linalg.slogdet(u1)
@@ -751,9 +683,6 @@ class ImprovedGaussianModel(ImprovedModel):
         logdet2 = u2_s + u2_logdet + d2_logdet + v2_s + v2_logdet
 
         return jnp.sum(A ** 2) / (2 * self.u) - logdet1 - logdet2
-
-    def action(self, A):
-        return self.action_naive(A)
 
 
 @dataclass
@@ -779,51 +708,17 @@ class ImprovedGaussianModel2(ImprovedModel):
 
         self.periodic_contour = False
 
-    def Hubbard1(self, A):
-        fer_mat1 = jnp.eye(self.lattice.V) + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(1j * A[t * self.lattice.V + x] + self.mu))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat1 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat1)
-
-        return jnp.eye(self.lattice.V) + fer_mat1
-
-    def Hubbard2(self, A):
-        fer_mat2 = jnp.eye(self.lattice.V) + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(-1j * A[t * self.lattice.V + x] - self.mu))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat2 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat2)
-
-        return jnp.eye(self.lattice.V) + fer_mat2
+    def Hubbard(self, A, spin=1):
+        M = jnp.identity(self.L*self.L) + 0j
+        Ab = A.reshape((self.nt, self.L*self.L))
+        for t in range(self.nt):
+            i, _ = jnp.diag_indices_from(M)
+            M = self.h @ jnp.diag(jnp.exp(spin*(1j*Ab[t, i]+self.mu))) @ M
+        return jnp.identity(self.L*self.L) + M
 
     def action(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard1(A))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard2(A))
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
         return jnp.sum(A ** 2) / (2 * self.u) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
 
@@ -943,8 +838,8 @@ class DiagonalModel(ImprovedModel):
 
         self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
         self.hopping = self.Hopping.hopping()
-        self.dof = self.lattice.dof
 
+        self.dof = self.lattice.dof
         self.periodic_contour = False
 
         self.hopping_mat = jnp.eye(self.lattice.V) - self.kappa * self.hopping
@@ -952,51 +847,18 @@ class DiagonalModel(ImprovedModel):
         self.hopping_s, self.hopping_logdet = jnp.linalg.slogdet(
             self.hopping_mat)
 
-    def Hubbard1(self, A):
-        fer_mat1 = self.hopping_mat + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                -jnp.exp(1j * A[t * self.lattice.V + x]) - self.mu)
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return temp_mat @ self.hopping_inverse
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat1 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat1)
-
-        return jnp.eye(self.lattice.V) + fer_mat1
-
-    def Hubbard2(self, A):
-        fer_mat2 = self.hopping_mat + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                -jnp.exp(-1j * A[t * self.lattice.V + x]) + self.mu)
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return temp_mat @ self.hopping_inverse
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat2 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat2)
-
-        return jnp.eye(self.lattice.V) + fer_mat2
+    def Hubbard(self, A, spin=1):
+        M = self.hopping_mat + 0j
+        Ab = A.reshape((self.nt, self.L*self.L))
+        for t in range(self.nt):
+            i, _ = jnp.diag_indices_from(M)
+            M = jnp.diag(
+                -jnp.exp(spin*1j*Ab[t, i])-spin*self.mu) @ self.hopping_inverse @ M
+        return jnp.identity(self.L*self.L) + M
 
     def action(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard1(A))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard2(A))
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
         return jnp.sum(A ** 2) / (2 * self.u) - 2 * self.lattice.nt * (self.hopping_s + self.hopping_logdet) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
 
@@ -1019,61 +881,23 @@ class ImprovedGaussianAlphaModel(ImprovedGaussianModel):
 
         self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
         self.hopping = self.Hopping.hopping()
-        self.h1 = self.Hopping.exp_h1()
-        self.h2 = self.Hopping.exp_h2()
-        self.dof = self.lattice.dof
+        self.h = {1: self.Hopping.exp_h1(), -1: self.Hopping.exp_h2()}
 
+        self.dof = self.lattice.dof
         self.periodic_contour = False
 
-    def Hubbard1(self, A):
-        fer_mat1 = jnp.eye(self.lattice.V) + 0j
-        phi = A[:self.lattice.dof//2]
-        chi = A[self.lattice.dof//2:]
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(1j * phi[t * self.lattice.V + x] + chi[t * self.lattice.V + x]))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h1 @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat1 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat1)
-
-        return jnp.eye(self.lattice.V) + fer_mat1
-
-    def Hubbard2(self, A):
-        fer_mat2 = jnp.eye(self.lattice.V) + 0j
-        phi = A[:self.lattice.dof//2]
-        chi = A[self.lattice.dof//2:]
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(-1j * phi[t * self.lattice.V + x] + chi[t * self.lattice.V + x]))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h2 @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat2 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat2)
-
-        return jnp.eye(self.lattice.V) + fer_mat2
+    def Hubbard(self, A, spin=1):
+        M = jnp.identity(self.L*self.L) + 0j
+        Ab = A.reshape((2*self.nt, self.L*self.L))
+        for t in range(self.nt):
+            i, _ = jnp.diag_indices_from(M)
+            M = self.h[spin] @ jnp.diag(jnp.exp(1j*spin *
+                                        Ab[t, i] + Ab[self.nt + t, i])) @ M
+        return jnp.identity(self.L*self.L) + M
 
     def action(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard1(A))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard2(A))
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
         return jnp.sum(A[:self.lattice.dof//2] ** 2) / (2 * self.alpha * self.u) + jnp.sum((A[self.lattice.dof//2:] + (1 - self.alpha) * self.u)**2)/(2 * (1 - self.alpha) * self.u) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
 
@@ -1095,10 +919,9 @@ class HyperbolicModel(ImprovedGaussianModel):
 
         self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
         self.hopping = self.Hopping.hopping()
-        self.h1 = self.Hopping.exp_h1()
-        self.h2 = self.Hopping.exp_h2()
-        self.dof = self.lattice.dof
+        self.h = {1: self.Hopping.exp_h1(), -1: self.Hopping.exp_h2()}
 
+        self.dof = self.lattice.dof
         self.periodic_contour = False
 
     def BetaFunction(self):
@@ -1108,51 +931,18 @@ class HyperbolicModel(ImprovedGaussianModel):
 
         return float(betas[0])
 
-    def Hubbard1(self, A):
-        fer_mat1 = jnp.eye(self.lattice.V) + 0j
+    def Hubbard(self, A, spin=1):
+        M = jnp.identity(self.L*self.L) + 0j
+        Ab = A.reshape((self.nt, self.L*self.L))
+        for t in range(self.nt):
+            i, _ = jnp.diag_indices_from(M)
+            M = self.h[spin] @ jnp.diag(jnp.exp(1j *
+                                        spin * self.beta * Ab[t, i])) @ M
+        return jnp.identity(self.L*self.L) + M
 
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(1j * self.beta * A[t * self.lattice.V + x]))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h1 @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat1 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat1)
-
-        return jnp.eye(self.lattice.V) + fer_mat1
-
-    def Hubbard2(self, A):
-        fer_mat2 = jnp.eye(self.lattice.V) + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(-1j * self.beta * A[t * self.lattice.V + x]))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h2 @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat2 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat2)
-
-        return jnp.eye(self.lattice.V) + fer_mat2
-
-    def action(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard1(jnp.tanh(A)))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard2(jnp.tanh(A)))
+    def action_h(self, A):
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(jnp.tanh(A)))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(jnp.tanh(A), -1))
         return 2 * jnp.sum(jnp.log(jnp.cosh(A))) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
 
@@ -1174,10 +964,9 @@ class ImprovedSpinModel(ImprovedModel):
 
         self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
         self.hopping = self.Hopping.hopping()
-        self.h1 = self.Hopping.exp_h1()
-        self.h2 = self.Hopping.exp_h2()
-        self.dof = self.lattice.dof
+        self.h = {1: self.Hopping.exp_h1(), -1: self.Hopping.exp_h2()}
 
+        self.dof = self.lattice.dof
         self.periodic_contour = True
 
     def BetaFunction(self):
@@ -1188,51 +977,17 @@ class ImprovedSpinModel(ImprovedModel):
 
         return float(betas[0])
 
-    def Hubbard1(self, A):
-        fer_mat1 = jnp.eye(self.lattice.V) + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(jnp.sin(A[t * self.lattice.V + x])))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h1 @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat1 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat1)
-
-        return jnp.eye(self.lattice.V) + fer_mat1
-
-    def Hubbard2(self, A):
-        fer_mat2 = jnp.eye(self.lattice.V) + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(jnp.sin(A[t * self.lattice.V + x])))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h2 @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat2 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat2)
-
-        return jnp.eye(self.lattice.V) + fer_mat2
+    def Hubbard(self, A, spin=1):
+        M = jnp.identity(self.L*self.L) + 0j
+        Ab = A.reshape((self.nt, self.L*self.L))
+        for t in range(self.nt):
+            i, _ = jnp.diag_indices_from(M)
+            M = self.h[spin] @ jnp.diag(jnp.exp(jnp.sin(Ab[t, i]))) @ M
+        return jnp.identity(self.L*self.L) + M
 
     def action(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard1(A))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard2(A))
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
         return -self.beta * jnp.sum(jnp.cos(A)) - jnp.sum(jnp.sin(A)) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
 
@@ -1277,6 +1032,11 @@ class ImprovedGaussianSpinModel(ImprovedModel):
             i, _ = jnp.diag_indices_from(M)
             M = self.h[spin] @ jnp.diag(jnp.exp(Ab[t, i])) @ M
         return jnp.identity(self.L*self.L) + M
+
+    def action(self, A):
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
+        return jnp.sum(A ** 2) / (2 * self.u) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
     def Hubbard1_svd(self, A):
         fer_mat1 = (jnp.eye(self.lattice.V) + 0j,
@@ -1336,11 +1096,6 @@ class ImprovedGaussianSpinModel(ImprovedModel):
 
         return final_u, final_d, final_v
 
-    def action(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
-        return jnp.sum(A ** 2) / (2 * self.u) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
-
     def action_svd(self, A):
         u1, d1, v1 = self.Hubbard1_svd(A)
         u1_s, u1_logdet = jnp.linalg.slogdet(u1)
@@ -1380,49 +1135,15 @@ class ImprovedGaussianSpinModel2(ImprovedModel):
 
         self.periodic_contour = False
 
-    def Hubbard1(self, A):
-        fer_mat1 = jnp.eye(self.lattice.V) + 0j
+    def Hubbard(self, A, spin=1):
+        M = jnp.identity(self.L*self.L) + 0j
+        Ab = A.reshape((self.nt, self.L*self.L))
+        for t in range(self.nt):
+            i, _ = jnp.diag_indices_from(M)
+            M = self.h @ jnp.diag(jnp.exp(Ab[t, i]+spin*self.mu)) @ M
+        return jnp.identity(self.L*self.L) + M
 
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(A[t * self.lattice.V + x] + self.mu))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat1 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat1)
-
-        return jnp.eye(self.lattice.V) + fer_mat1
-
-    def Hubbard2(self, A):
-        fer_mat2 = jnp.eye(self.lattice.V) + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(A[t * self.lattice.V + x]) - self.mu)
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat2 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat2)
-
-        return jnp.eye(self.lattice.V) + fer_mat2
-
-    def action(self, A):
+    def action_h(self, A):
         s1, logdet1 = jnp.linalg.slogdet(self.Hubbard1(A))
         s2, logdet2 = jnp.linalg.slogdet(self.Hubbard2(A))
         return jnp.sum(A ** 2) / (2 * self.u) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
