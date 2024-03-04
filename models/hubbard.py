@@ -120,14 +120,12 @@ class ImprovedModel:
 
         self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
         self.hopping = self.Hopping.hopping()
-        self.h1 = self.Hopping.exp_h1()
-        self.h2 = self.Hopping.exp_h2()
+        self.h = {1: self.Hopping.exp_h1(), -1: self.Hopping.exp_h2()}
 
-        self.h1_svd = jnp.linalg.svd(self.h1)
-        self.h2_svd = jnp.linalg.svd(self.h2)
+        self.h1_svd = jnp.linalg.svd(self.h[1])
+        self.h2_svd = jnp.linalg.svd(self.h[-1])
 
         self.dof = self.lattice.dof
-
         self.periodic_contour = True
 
     def BetaFunction(self):
@@ -138,47 +136,13 @@ class ImprovedModel:
 
         return float(betas[0])
 
-    def Hubbard1(self, A):
-        fer_mat1 = jnp.eye(self.lattice.V) + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(1j * jnp.sin(A[t * self.lattice.V + x])))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h1 @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat1 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat1)
-
-        return jnp.eye(self.lattice.V) + fer_mat1
-
-    def Hubbard2(self, A):
-        fer_mat2 = jnp.eye(self.lattice.V) + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(-1j * jnp.sin(A[t * self.lattice.V + x])))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h2 @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat2 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat2)
-
-        return jnp.eye(self.lattice.V) + fer_mat2
+    def Hubbard(self, A, spin=1):
+        M = jnp.identity(self.L*self.L) + 0j
+        Ab = A.reshape((self.nt, self.L*self.L))
+        for t in range(self.nt):
+            i, _ = jnp.diag_indices_from(M)
+            M = self.h[spin] @ jnp.diag(jnp.exp(1j*spin*jnp.sin(Ab[t, i]))) @ M
+        return jnp.identity(self.L*self.L) + M
 
     # Error: Singular value decomposition JVP not implemented for full matrices
     # https://github.com/google/jax/issues/2011
@@ -248,9 +212,9 @@ class ImprovedModel:
 
         return final_u, final_d, final_v
 
-    def action_naive(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard1(A))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard2(A))
+    def action(self, A):
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
         return -self.beta * jnp.sum(jnp.cos(A)) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
     def action_svd(self, A):
@@ -268,12 +232,9 @@ class ImprovedModel:
 
         return -self.beta * jnp.sum(jnp.cos(A)) - logdet1 - logdet2
 
-    def action(self, A):
-        return self.action_naive(A)
-
     def density(self, A):
-        fer_mat1_inv = jnp.linalg.inv(self.Hubbard1(A))
-        fer_mat2_inv = jnp.linalg.inv(self.Hubbard2(A))
+        fer_mat1_inv = jnp.linalg.inv(self.Hubbard(A))
+        fer_mat2_inv = jnp.linalg.inv(self.Hubbard(A, -1))
 
         return jnp.trace(fer_mat2_inv - fer_mat1_inv) / self.lattice.V
 
@@ -284,8 +245,8 @@ class ImprovedModel:
 
     def staggered_magnetization(self, A):
         m = 0 + 0j
-        fer_mat1_inv = jnp.linalg.inv(self.Hubbard1(A))
-        fer_mat2_inv = jnp.linalg.inv(self.Hubbard2(A))
+        fer_mat1_inv = jnp.linalg.inv(self.Hubbard(A, 1))
+        fer_mat2_inv = jnp.linalg.inv(self.Hubbard(A, -1))
 
         idx = self.lattice.idx1
         size = self.lattice.L
@@ -325,8 +286,8 @@ class ImprovedModel:
 
     def magnetization(self, A):
         m = 0 + 0j
-        fer_mat1_inv = jnp.linalg.inv(self.Hubbard1(A))
-        fer_mat2_inv = jnp.linalg.inv(self.Hubbard2(A))
+        fer_mat1_inv = jnp.linalg.inv(self.Hubbard(A, 1))
+        fer_mat2_inv = jnp.linalg.inv(self.Hubbard(A, -1))
 
         idx = self.lattice.idx1
         size = self.lattice.L
@@ -366,19 +327,19 @@ class ImprovedModel:
         return m
 
     def n1(self, A):
-        fer_mat1_inv = jnp.linalg.inv(self.Hubbard1(A))
+        fer_mat1_inv = jnp.linalg.inv(self.Hubbard(A))
 
         return jnp.trace(fer_mat1_inv) / self.lattice.V
 
     def n2(self, A):
-        fer_mat2_inv = jnp.linalg.inv(self.Hubbard2(A))
+        fer_mat2_inv = jnp.linalg.inv(self.Hubbard(A, -1))
 
         return jnp.trace(fer_mat2_inv) / self.lattice.V
 
     def hamiltonian(self, A):
         h = 0 + 0j
-        fer_mat1_inv = jnp.linalg.inv(self.Hubbard1(A))
-        fer_mat2_inv = jnp.linalg.inv(self.Hubbard2(A))
+        fer_mat1_inv = jnp.linalg.inv(self.Hubbard(A))
+        fer_mat2_inv = jnp.linalg.inv(self.Hubbard(A, -1))
 
         idx = self.lattice.idx1
         size = self.lattice.L
@@ -408,14 +369,6 @@ class ImprovedModel:
 
     def observe(self, A):
         return jnp.array([self.density(A), self.doubleoccupancy(A), self.action(A), self.staggered_magnetization(A)])
-
-    def all(self, A):
-        """
-        Returns:
-            Action and gradient
-        """
-        act, dact = jax.value_and_grad(self.action, holomorphic=True)(A+0j)
-        return act, dact
 
 
 @dataclass
@@ -1317,12 +1270,12 @@ class ImprovedGaussianSpinModel(ImprovedModel):
         self.dof = self.lattice.dof
         self.periodic_contour = False
 
-    def Hubbard(self, A, beta=1):
+    def Hubbard(self, A, spin=1):
         M = jnp.identity(self.L*self.L) + 0j
         Ab = A.reshape((self.nt, self.L*self.L))
         for t in range(self.nt):
             i, _ = jnp.diag_indices_from(M)
-            M = self.h[beta] @ jnp.diag(jnp.exp(Ab[t, i])) @ M
+            M = self.h[spin] @ jnp.diag(jnp.exp(Ab[t, i])) @ M
         return jnp.identity(self.L*self.L) + M
 
     def Hubbard1_svd(self, A):
