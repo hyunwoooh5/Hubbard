@@ -21,114 +21,44 @@ class Lattice:
         #       self.D = len(self.geom)
         self.V = self.L**2
         self.dof = self.V * self.nt
+        self.shape = (self.nt, self.L, self.L)
 
-    def idx(self, t, x1, x2):
-        return (x2 % self.L) + self.L * (x1 % self.L) + self.L * self.L * (t % self.nt)
+    def idx(self, *args):
+        n = len(args)
+        return jnp.ravel_multi_index(args, self.shape[-n:], mode='wrap')
 
-    def idx1(self, x1, x2):
-        return (x2 % self.L) + self.L * (x1 % self.L)
-
-    def idxreverse(self, num):
-        t = num // (self.L**2)
-        x1 = (num - t * (self.L ** 2)) // self.L
-        x2 = (num - t * (self.L ** 2) - x1 * self.L) % self.L
-
-        return jnp.array([t, x1, x2], int)
+    def cartidx(self, idx):
+        return jnp.unravel_index(idx, self.shape)
 
     def sites(self):
         # Return a list of all sites.
-        return jnp.indices((self.nt, self.L, self.L))
-
-    def sites1(self):
-        # for exp discretiizaiton
-        return jnp.indices((self.nt, self.L, self.L, self.L, self.L))
+        return jnp.indices(self.shape)
 
     def spatial_sites(self):
         # Return a list of spatial sites
         return jnp.indices((self.L, self.L))
 
     def coords(self, i):
-        t = i//self.L
-        x = i % self.L
-        return t, x
+        return jnp.unravel_index(i, (self.nt, self.L))
 
     def even(self):
-        e_even = jnp.zeros([self.nt, self.L//2, self.L//2])
-        e_odd = jnp.zeros([self.nt, self.L//2, self.L//2])
-
-        def even_update_at(K, t, i, j):
-            K = K.at[t, i, j].set(t * self.V + 2*(self.L * i + j))
-            return K
-
-        def odd_update_at(K, t, i, j):
-            K = K.at[t, i, j].set(
-                t * self.V + 2*(self.L * i + j + self.L//2) + 1)
-            return K
-
         ts, xs, ys = jnp.indices((self.nt, self.L//2, self.L//2))
-        ts = jnp.ravel(ts)
-        xs = jnp.ravel(xs)
-        ys = jnp.ravel(ys)
-
-        def even_update_at_i(i, K):
-            return even_update_at(K, ts[i], xs[i], ys[i])
-
-        def odd_update_at_i(i, K):
-            return odd_update_at(K, ts[i], xs[i], ys[i])
-
-        e_even = jax.lax.fori_loop(0, len(ts), even_update_at_i, e_even)
-        e_odd = jax.lax.fori_loop(0, len(ts), odd_update_at_i, e_odd)
-
+        e_even = ts * self.V + 2*(self.L * xs + ys)
+        e_odd = ts * self.V + 2*(self.L * xs + ys + self.L//2) + 1
         e = jnp.concatenate((e_even, e_odd), axis=None)
-
         return jnp.array(e, int).sort()
 
     def odd(self):
-        o_even = jnp.zeros([self.nt, self.L//2, self.L//2])
-        o_odd = jnp.zeros([self.nt, self.L//2, self.L//2])
-
-        def even_update_at(K, t, i, j):
-            K = K.at[t, i, j].set(t * self.V + 2*(self.L * i + j) + 1)
-            return K
-
-        def odd_update_at(K, t, i, j):
-            K = K.at[t, i, j].set(t * self.V + 2*(self.L * i + j + self.L//2))
-            return K
-
         ts, xs, ys = jnp.indices((self.nt, self.L//2, self.L//2))
-        ts = jnp.ravel(ts)
-        xs = jnp.ravel(xs)
-        ys = jnp.ravel(ys)
-
-        def even_update_at_i(i, K):
-            return even_update_at(K, ts[i], xs[i], ys[i])
-
-        def odd_update_at_i(i, K):
-            return odd_update_at(K, ts[i], xs[i], ys[i])
-
-        o_even = jax.lax.fori_loop(0, len(ts), even_update_at_i, o_even)
-        o_odd = jax.lax.fori_loop(0, len(ts), odd_update_at_i, o_odd)
-
+        o_even = ts * self.V + 2*(self.L * xs + ys) + 1
+        o_odd = ts * self.V + 2*(self.L * xs + ys + self.L//2)
         o = jnp.concatenate((o_even, o_odd), axis=None)
-
         return jnp.array(o, int).sort()
 
-    def nearestneighbor(self, num):
-        index = self.idxreverse(num)
-
-        x1 = (index+jnp.array([0, 0, 1])
-              ) % jnp.array([self.nt, self.L, self.L])
-        x2 = (index+jnp.array([0, 1, 0])
-              ) % jnp.array([self.nt, self.L, self.L])
-        x3 = (index+jnp.array([0, 0, -1])
-              ) % jnp.array([self.nt, self.L, self.L])
-        x4 = (index+jnp.array([0, -1, 0])
-              ) % jnp.array([self.nt, self.L, self.L])
-
-        def _idx(arr):
-            return (arr[2] % self.L) + self.L * (arr[1] % self.L) + self.L * self.L * (arr[0] % self.nt)
-
-        return jnp.array([_idx(x1), _idx(x2), _idx(x3), _idx(x4)], int)
+    def nearestneighbor(self, idx):
+        t, x, y = self.idxcart(idx)
+        indices = ((t, x, y+1), (t, x+1, y), (t, x, y-1), (t, x-1, y))
+        return jnp.ravel_multi_index(indices, self.shape, mode='wrap')
 
 
 @dataclass
@@ -138,30 +68,20 @@ class Hopping:
     mu: float
 
     def hopping(self):
-        size = self.lattice.L
-        hop = jnp.zeros((size**2, size**2))
-        a = Lattice(self.lattice.L, 1)
-
-        for x1, y1, x2, y2 in product(range(size), range(size), range(size), range(size)):
-            if (x1 == x2 and (y1 == (y2 + 1) % size or y1 == (y2 - 1 + size) % size)):
-                hop = hop.at[a.idx1(x1, y1), a.idx1(x2, y2)].set(1.0)
-            if (y1 == y2 and (x1 == (x2 + 1) % size or x1 == (x2 - 1 + size) % size)):
-                hop = hop.at[a.idx1(x1, y1), a.idx1(x2, y2)].set(1.0)
-
-        return hop
+        L = self.lattice.L
+        x1, y1, x2, y2 = jnp.indices((L, L, L, L))
+        pred = (((x1 == x2) & ((y1 == (y2 + 1) % L) | (y1 == (y2 - 1) % L))) |
+                ((y1 == y2) & ((x1 == (x2 + 1) % L) | (x1 == (x2 - 1) % L))))
+        hop = jnp.where(pred, 1.0, 0.0)
+        return hop.reshape((L*L, L*L))
 
     def hopping2(self):
-        size = self.lattice.L
-        hop2 = jnp.zeros((size**2, size**2))
-        a = Lattice(self.lattice.L, 1)
-
-        for x1, y1, x2, y2 in product(range(size), range(size), range(size), range(size)):
-            if (x1 == (x2 + 1) % size and (y1 == (y2 + 1) % size or y1 == (y2 - 1 + size) % size)):
-                hop2 = hop2.at[a.idx1(x1, y1), a.idx1(x2, y2)].set(1.0)
-            if (x1 == (x2 - 1 + size) % size and (y1 == (y2 + 1) % size or y1 == (y2 - 1 + size) % size)):
-                hop2 = hop2.at[a.idx1(x1, y1), a.idx1(x2, y2)].set(1.0)
-
-        return hop2
+        L = self.lattice.L
+        x1, y1, x2, y2 = jnp.indices((L, L, L, L))
+        pred = (((x1 == (x2 + 1) % L) & ((y1 == (y2 + 1) % L) | (y1 == (y2 - 1) % L))) |
+                ((x1 == (x2 - 1) % L) & ((y1 == (y2 + 1) % L) | (y1 == (y2 - 1) % L))))
+        hop = jnp.where(pred, 1.0, 0.0)
+        return hop.reshape((L*L, L*L))
 
     def exp_h1(self):
         h1 = self.kappa * self.hopping() + self.mu * jnp.identity(self.lattice.V) + \
@@ -358,16 +278,9 @@ class ImprovedModel:
         return jnp.trace(fer_mat2_inv - fer_mat1_inv) / self.lattice.V
 
     def doubleoccupancy(self, A):
-        d = 0 + 0j
-        fer_mat1_inv = jnp.linalg.inv(self.Hubbard1(A))
-        fer_mat2_inv = jnp.linalg.inv(self.Hubbard2(A))
-
-        def do(i, d):
-            return d + fer_mat2_inv[i, i] * (1.0 - fer_mat1_inv[i, i])
-
-        d = jax.lax.fori_loop(0, self.lattice.V, do, d) / self.lattice.V
-
-        return d
+        D1 = jnp.diagonal(jnp.linalg.inv(self.Hubbard(A)))
+        D2 = jnp.diagonal(jnp.linalg.inv(self.Hubbard(A, -1)))
+        return jnp.mean(D2*(1-D1))
 
     def staggered_magnetization(self, A):
         m = 0 + 0j
@@ -1388,65 +1301,29 @@ class ImprovedGaussianSpinModel(ImprovedModel):
         self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
         self.hopping = self.Hopping.hopping()
 
-        self.h1 = self.kappa * self.hopping
-        for i in range(self.lattice.L**2):
-            self.h1 = self.h1.at[i, i].add(self.mu-self.u)
+        self.h1 = self.kappa * self.hopping + \
+            (self.mu-self.u)*jnp.identity(self.lattice.V)
         self.h1 = expm(self.h1)
 
-        self.h1_svd = jnp.linalg.svd(self.h1)
-
-        self.h2 = self.kappa * self.hopping
-        for i in range(self.lattice.L**2):
-            self.h2 = self.h2.at[i, i].add(-self.mu-self.u)
+        self.h2 = self.kappa * self.hopping + \
+            (-self.mu-self.u)*jnp.identity(self.lattice.V)
         self.h2 = expm(self.h2)
 
+        self.h = {1: self.h1, -1: self.h2}
+
+        self.h1_svd = jnp.linalg.svd(self.h1)
         self.h2_svd = jnp.linalg.svd(self.h2)
 
         self.dof = self.lattice.dof
-
         self.periodic_contour = False
 
-    def Hubbard1(self, A):
-        fer_mat1 = jnp.eye(self.lattice.V) + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(A[t * self.lattice.V + x]))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h1 @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat1 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat1)
-
-        return jnp.eye(self.lattice.V) + fer_mat1
-
-    def Hubbard2(self, A):
-        fer_mat2 = jnp.eye(self.lattice.V) + 0j
-
-        def update_at_tx(t, x, H):
-            H = H.at[x, x].add(
-                jnp.exp(A[t * self.lattice.V + x]))
-            return H
-
-        def update_at_t(t):
-            some = jax.tree_util.Partial(update_at_tx, t)
-            temp_mat = jnp.zeros((self.lattice.V, self.lattice.V)) + 0j
-            temp_mat = jax.lax.fori_loop(0, self.lattice.V, some, temp_mat)
-            return self.h2 @ temp_mat
-
-        def multi(t, fer_mat):
-            return update_at_t(t) @ fer_mat
-
-        fer_mat2 = jax.lax.fori_loop(0, self.lattice.nt, multi, fer_mat2)
-
-        return jnp.eye(self.lattice.V) + fer_mat2
+    def Hubbard(self, A, beta=1):
+        M = jnp.identity(self.L*self.L) + 0j
+        Ab = A.reshape((self.nt, self.L*self.L))
+        for t in range(self.nt):
+            i, _ = jnp.diag_indices_from(M)
+            M = self.h[beta] @ jnp.diag(jnp.exp(Ab[t, i])) @ M
+        return jnp.identity(self.L*self.L) + M
 
     def Hubbard1_svd(self, A):
         fer_mat1 = (jnp.eye(self.lattice.V) + 0j,
@@ -1506,9 +1383,9 @@ class ImprovedGaussianSpinModel(ImprovedModel):
 
         return final_u, final_d, final_v
 
-    def action_naive(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard1(A))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard2(A))
+    def action(self, A):
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
         return jnp.sum(A ** 2) / (2 * self.u) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
     def action_svd(self, A):
@@ -1525,9 +1402,6 @@ class ImprovedGaussianSpinModel(ImprovedModel):
         logdet2 = u2_s + u2_logdet + d2_logdet + v2_s + v2_logdet
 
         return jnp.sum(A ** 2) / (2 * self.u) - logdet1 - logdet2
-
-    def action(self, A):
-        return self.action_naive(A)
 
 
 @dataclass
