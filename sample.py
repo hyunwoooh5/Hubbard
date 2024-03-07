@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 from models import hubbard
-from mc import metropolis, replica
+from mc import metropolis, replica, hmc
 from contour import *
 import argparse
 import itertools
@@ -24,6 +24,8 @@ parser.add_argument('model', type=str, help="model filename")
 parser.add_argument('contour', type=str, help="contour filename")
 parser.add_argument('-r', '--replica', action='store_true',
                     help="use replica exchange")
+parser.add_argument('-H', '--hmc', action='store_true',
+                    help="use HMC")
 parser.add_argument('-nrep', '--nreplicas', type=int, default=30,
                     help="number of replicas (with -r)")
 parser.add_argument('-maxh', '--max-hbar', type=float,
@@ -62,6 +64,8 @@ skip = args.skip
 
 if args.skip == 30:
     skip = V
+if args.hmc:
+    skip = 1
 
 if type(contour) == RealContour:
     @jax.jit
@@ -95,6 +99,8 @@ def observe(x, p):
 if args.replica:
     chain = replica.ReplicaExchange(lambda x: Seff(x, contour_params), jnp.zeros(
         V), chain_key, delta=1./jnp.sqrt(V), max_hbar=args.max_hbar, Nreplicas=args.nreplicas)
+elif args.hmc:
+    chain = hmc.Chain(model.action, jnp.zeros(V), chain_key, L=20, dt=0.2)
 else:
     chain = metropolis.Chain(lambda x: Seff(
         x, contour_params), jnp.zeros(V), chain_key, delta=1./jnp.sqrt(V))

@@ -1,62 +1,81 @@
-import numpy as np
 import jax
 import jax.numpy as jnp
+from functools import partial
 
-class HMC:
-    def __init__(self, action, init, L=100, dt=0.4):
-        self.action = jax.jit(action)
-        self._grad = jax.jit(jax.grad(action))
-        self.state = init
+
+class Chain:
+    def __init__(self, action, x0, key, L=10, dt=0.3, temperature=1.):
+        self.action = jax.jit(lambda y: action(y).real)
+        self._grad = jax.jit(jax.grad(lambda y: action(y).real))
+        self.x = x0
         self.L = L
         self.dt = dt
-        
-        self._shape = init.shape
-        self._len = np.prod(self._shape, dtype=int)
-        # TODO it sure would be nice to allow arbitrary mass matrices
-        #self._mass = np.eye(self._len)
+        self.temperature = temperature
+        self._key = key
+        self._recent = [False]
 
-        self._steps_proposed = 0
-        self._steps_accepted = 0
+        # @partial(jax.jit, static_argnums=2)
+        @jax.jit
+        def _propose(key, x, dt):
+            kstep, key = jax.random.split(key, 2)
+            p = jax.random.normal(kstep, x.shape)
 
-    def __iter__(self):
-        return self
+            # initial hamiltonian
+            x0 = x
+            h0 = jnp.sum(p**2)/2+self.action(x)
 
-    def __next__(self):
-        # Initial position
-        x = self.state
-        # Initial momentum
-        p = np.random.normal(size=self._shape)
-        # Initial Hamiltonian
-        H0 = np.sum(p**2) / 2 + self.action(x)
+            # Leapfrog integration
+            for _ in range(self.L):
+                p -= dt/2*self._grad(x)
+                x += dt * p
+                p -= dt/2*self._grad(x)
 
-        # Leapfrog integration
-        for l in range(self.L):
-            p -= self.dt/2 * self._grad(x)
-            x += self.dt * p
-            p -= self.dt/2 * self._grad(x)
-            pass
+            # final hamiltonian
+            xp = x
+            hp = jnp.sum(p**2)/2+self.action(xp)
 
-        # Accept/reject
-        self._steps_proposed += 1
-        H = np.sum(p**2) / 2 + self.action(x)
-        if np.random.uniform() < np.exp(H0-H):
-            self._steps_accepted += 1
-            self.state = x
+            return x0, h0, xp, hp
 
-        return self.state
+        def _acceptreject(key, temperature, x, h, xp, hp):
+            key, kacc = jax.random.split(key, 2)
+            hdiff = hp - h
+
+            def accept():
+                return xp, True
+
+            def reject():
+                return x, False
+
+            acc = jax.random.uniform(kacc) < jnp.exp(-hdiff/temperature)
+            x, accepted = jax.lax.cond(acc, accept, reject)
+
+            return key, x, accepted
+
+        self._propose = _propose
+        self._acceptreject = jax.jit(_acceptreject)
+
+    def step(self, N=1):
+        for _ in range(N):
+            x, h, xp, hp = self._propose(self._key, self.x, self.dt)
+            self._key, self.x, accepted = self._acceptreject(
+                self._key, self.temperature, x, h, xp, hp)
+            self._recent.append(accepted)
+        self._recent = self._recent[-100:]
+
+    def calibrate(self):
+        # Adjust leapfrog steps
+        self.step(N=100)
+        while self.acceptance_rate() < 0.6 or self.acceptance_rate() > 0.9:
+            if self.acceptance_rate() < 0.6:
+                self.dt *= 0.98
+            if self.acceptance_rate() > 0.9:
+                self.dt *= 1.02
+            self.step(N=100)
 
     def acceptance_rate(self):
-        return self._steps_accepted / self._steps_proposed
+        return sum(self._recent) / len(self._recent)
 
-    def calibrate(self):
-        pass
-
-class NUTS:
-    def __init__(self):
-        pass
-
-    def step(self):
-        pass
-
-    def calibrate(self):
-        pass
+    def iter(self, skip=1):
+        while True:
+            self.step(N=skip)
+            yield self.x
