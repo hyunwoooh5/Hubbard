@@ -115,7 +115,7 @@ try:
         def slc(it): return itertools.islice(it, args.samples)
 
     for x in slc(chain.iter(skip)):
-        phase, obs = observe(x)
+        phase, obs = observe(x, contour_params)
         if jnp.size(obs) == 1:
             obsstr = str(obs)
         else:
