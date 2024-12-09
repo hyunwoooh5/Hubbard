@@ -19,9 +19,10 @@ import numpy as np
 jax.config.update('jax_platform_name', 'cpu')
 
 
-parser = argparse.ArgumentParser(description="Train contour")
+parser = argparse.ArgumentParser(description="Generate configurations")
 parser.add_argument('model', type=str, help="model filename")
 parser.add_argument('contour', type=str, help="contour filename")
+parser.add_argument('config', type=str, help="config filename")
 parser.add_argument('-r', '--replica', action='store_true',
                     help="use replica exchange")
 parser.add_argument('-H', '--hmc', action='store_true',
@@ -67,12 +68,7 @@ if args.skip == 30:
 if args.hmc:
     skip = 1
 
-if type(contour) == RealContour:
-    @jax.jit
-    def Seff(x, p):
-        return model.action(x)
-
-elif type(contour) == ConstantShift:
+if type(contour) == RealContour or type(contour) == ConstantShift:
     @jax.jit
     def Seff(x, p):
         xt = contour.apply(p, x)
@@ -100,22 +96,34 @@ if args.replica:
     chain = replica.ReplicaExchange(lambda x: Seff(x, contour_params), jnp.zeros(
         V), chain_key, delta=1./jnp.sqrt(V), max_hbar=args.max_hbar, Nreplicas=args.nreplicas)
 elif args.hmc:
-    chain = hmc.Chain(model.action, jnp.zeros(V), chain_key, L=20, dt=0.2)
+    chain = hmc.Chain(lambda x: Seff(x, contour_params), jnp.zeros(V), chain_key, L=20, dt=0.2)
 else:
-    chain = metropolis.Chain(lambda x: Seff(
-        x, contour_params), jnp.zeros(V), chain_key, delta=1./jnp.sqrt(V))
+    chain = metropolis.Chain(lambda x: Seff(x, contour_params), jnp.zeros(V), chain_key, delta=1./jnp.sqrt(V))
+
 chain.calibrate()
 chain.step(N=args.thermalize*V)
 chain.calibrate()
+
+configs = []
+def save():
+    with open(args.config, 'wb') as f:
+        pickle.dump(jnp.array(configs), f)
+
 try:
     def slc(it): return it
     if args.samples >= 0:
         def slc(it): return itertools.islice(it, args.samples)
 
     for x in slc(chain.iter(skip)):
-        phase, obs = observe(x, contour_params)
-        obsstr = " ".join([str(x) for x in obs])
+        phase, obs = observe(x)
+        if jnp.size(obs) == 1:
+            obsstr = str(obs)
+        else:
+            obsstr = " ".join([str(x) for x in obs])
         print(f'{phase} {obsstr} {chain.acceptance_rate()}', flush=True)
+        configs.append(x)
+        if len(configs) % 1000 == 0:
+            save()
 
 except KeyboardInterrupt:
     pass
