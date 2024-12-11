@@ -371,51 +371,6 @@ class ImprovedModel:
 
 
 @dataclass
-class ImprovedModel2(ImprovedModel):
-    L: int
-    nt: int
-    Kappa: float
-    U: float
-    Mu: float
-    dt: float
-
-    def __post_init__(self):
-        self.lattice = Lattice(self.L, self.nt)
-        self.kappa = self.Kappa * self.dt
-        self.u = self.U * self.dt
-        self.mu = self.Mu * self.dt
-        self.beta = self.BetaFunction()
-
-        self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
-        self.hopping = self.Hopping.hopping()
-        self.h = self.Hopping.exp_h()
-
-        self.dof = self.lattice.dof
-        self.periodic_contour = True
-
-    def BetaFunction(self):
-        def fn(x):
-            return np.real(special.iv(0, np.sqrt((x + 0j)**2 - 1)) / special.iv(0, x + 0j)) - np.exp(-self.u/2)
-        betas = fsolve(fn, 1.0)
-
-        return float(betas[0])
-
-    def Hubbard(self, A, spin=1):
-        M = jnp.identity(self.L*self.L) + 0j
-        Ab = A.reshape((self.nt, self.L*self.L))
-        for t in range(self.nt):
-            i, _ = jnp.diag_indices_from(M)
-            M = self.h @ jnp.diag(jnp.exp(spin*(1j *
-                                  jnp.sin(Ab[t, i]) + self.mu))) @ M
-        return jnp.identity(self.L*self.L) + M
-
-    def action(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
-        return -self.beta * jnp.sum(jnp.cos(A)) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
-
-
-@dataclass
 class ConventionalModel(ImprovedModel):
     L: int
     nt: int
@@ -569,42 +524,6 @@ class ImprovedGaussianModel(ImprovedModel):
         logdet2 = u2_s + u2_logdet + d2_logdet + v2_s + v2_logdet
 
         return jnp.sum(A ** 2) / (2 * self.u) - logdet1 - logdet2
-
-
-@dataclass
-class ImprovedGaussianModel2(ImprovedModel):
-    L: int
-    nt: int
-    Kappa: float
-    U: float
-    Mu: float
-    dt: float
-
-    def __post_init__(self):
-        self.lattice = Lattice(self.L, self.nt)
-        self.kappa = self.Kappa * self.dt
-        self.u = self.U * self.dt
-        self.mu = self.Mu * self.dt
-
-        self.Hopping = Hopping(self.lattice, self.kappa, self.mu)
-        self.hopping = self.Hopping.hopping()
-        self.h = self.Hopping.exp_h()
-
-        self.dof = self.lattice.dof
-        self.periodic_contour = False
-
-    def Hubbard(self, A, spin=1):
-        M = jnp.identity(self.L*self.L) + 0j
-        Ab = A.reshape((self.nt, self.L*self.L))
-        for t in range(self.nt):
-            i, _ = jnp.diag_indices_from(M)
-            M = self.h @ jnp.diag(jnp.exp(spin*(1j*Ab[t, i]+self.mu))) @ M
-        return jnp.identity(self.L*self.L) + M
-
-    def action(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
-        return jnp.sum(A ** 2) / (2 * self.u) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
 
 @dataclass
@@ -965,8 +884,8 @@ class ImprovedGaussianSpinModel2(ImprovedModel):
         return jnp.identity(self.L*self.L) + M
 
     def action(self, A):
-        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard1(A))
-        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard2(A))
+        s1, logdet1 = jnp.linalg.slogdet(self.Hubbard(A))
+        s2, logdet2 = jnp.linalg.slogdet(self.Hubbard(A, -1))
         return jnp.sum(A ** 2) / (2 * self.u) - jnp.log(s1) - logdet1 - jnp.log(s2) - logdet2
 
 
