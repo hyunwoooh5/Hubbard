@@ -36,7 +36,6 @@ class Chain:
         return xp, Sp
 
     def step(self, N=1):
-        self.S = self.action(self.x)
         for _ in range(N):
             xp, Sp = self._action(self._key, self.x, self.delta)
             self._key, self.x, self.S, accepted = self._acceptreject(
@@ -55,7 +54,7 @@ class Chain:
             self.step(N=100)
 
     def acceptance_rate(self):
-        return sum(self._recent) / len(self._recent)
+        return sum(jnp.array(self._recent).tolist()) / len(jnp.array(self._recent).tolist())
 
     def iter(self, skip=1):
         while True:
