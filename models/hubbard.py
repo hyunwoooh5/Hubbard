@@ -13,12 +13,12 @@ import numpy as np
 
 @dataclass  # 2D model, LxL lattice
 class Lattice:
-    #    geom: Tuple[int]
+    # geom: Tuple[int]
     L: int
     nt: int
 
     def __post_init__(self):
-        #       self.D = len(self.geom)
+        # self.D = len(self.geom)
         self.V = self.L**2
         self.dof = self.V * self.nt
         self.shape = (self.nt, self.L, self.L)
@@ -38,9 +38,6 @@ class Lattice:
         # Return a list of spatial sites
         return jnp.indices((self.L, self.L))
 
-    def coords(self, i):
-        return jnp.unravel_index(i, (self.nt, self.L))
-
     def even(self):
         ts, xs, ys = jnp.indices((self.nt, self.L//2, self.L//2))
         e_even = ts * self.V + 2*(self.L * xs + ys)
@@ -56,9 +53,10 @@ class Lattice:
         return jnp.array(o, int).sort()
 
     def nearestneighbor(self, idx):
-        t, x, y = self.idxcart(idx)
-        indices = ((t, x, y+1), (t, x+1, y), (t, x, y-1), (t, x-1, y))
-        return jnp.ravel_multi_index(indices, self.shape, mode='wrap')
+        t, x, y = self.cartidx(idx)
+        indices = jnp.array(
+            [(t, x, y+1), (t, x+1, y), (t, x, y-1), (t, x-1, y)])
+        return jax.vmap(lambda x: jnp.ravel_multi_index(x, self.shape, mode='wrap'))(indices)
 
 
 @dataclass
@@ -127,6 +125,7 @@ class ImprovedModel:
 
         self.dof = self.lattice.dof
         self.periodic_contour = True
+        self.shape = self.lattice.shape
 
     def BetaFunction(self):
         def fn(x):
@@ -391,6 +390,7 @@ class ConventionalModel(ImprovedModel):
 
         self.dof = self.lattice.dof
         self.periodic_contour = True
+        self.shape = self.lattice.shape
 
     def BetaFunction(self):
         def fn(x):
@@ -438,6 +438,7 @@ class ImprovedGaussianModel(ImprovedModel):
 
         self.dof = self.lattice.dof
         self.periodic_contour = False
+        self.shape = self.lattice.shape
 
     def Hubbard(self, A, spin=1):
         M = jnp.identity(self.L*self.L) + 0j
@@ -546,6 +547,7 @@ class ConventionalGaussianModel(ImprovedGaussianModel):
 
         self.dof = self.lattice.dof
         self.periodic_contour = False
+        self.shape = self.lattice.shape
 
     def Hubbard(self, A, spin=1):
         M = jnp.identity(self.L*self.L) + 0j
@@ -582,6 +584,7 @@ class DiagonalModel(ImprovedModel):
 
         self.dof = self.lattice.dof
         self.periodic_contour = False
+        self.shape = self.lattice.shape
 
         self.hopping_mat = jnp.eye(self.lattice.V) - self.kappa * self.hopping
         self.hopping_inverse = jnp.linalg.inv(self.hopping_mat)
@@ -626,6 +629,7 @@ class ImprovedGaussianAlphaModel(ImprovedGaussianModel):
 
         self.dof = self.lattice.dof
         self.periodic_contour = False
+        self.shape = self.lattice.shape
 
     def Hubbard(self, A, spin=1):
         M = jnp.identity(self.L*self.L) + 0j
@@ -664,6 +668,7 @@ class HyperbolicModel(ImprovedGaussianModel):
 
         self.dof = self.lattice.dof
         self.periodic_contour = False
+        self.shape = self.lattice.shape
 
     def BetaFunction(self):
         def fn(x):
@@ -709,6 +714,7 @@ class ImprovedSpinModel(ImprovedModel):
 
         self.dof = self.lattice.dof
         self.periodic_contour = True
+        self.shape = self.lattice.shape
 
     def BetaFunction(self):
         def fn(x):
@@ -765,6 +771,7 @@ class ImprovedGaussianSpinModel(ImprovedModel):
 
         self.dof = self.lattice.dof
         self.periodic_contour = False
+        self.shape = self.lattice.shape
 
     def Hubbard(self, A, spin=1):
         M = jnp.identity(self.L*self.L) + 0j
@@ -874,6 +881,7 @@ class ImprovedGaussianSpinModel2(ImprovedModel):
 
         self.dof = self.lattice.dof
         self.periodic_contour = False
+        self.shape = self.lattice.shape
 
     def Hubbard(self, A, spin=1):
         M = jnp.identity(self.L*self.L) + 0j
@@ -910,6 +918,7 @@ class ConventionalSpinModel(ImprovedModel):
 
         self.dof = self.lattice.dof
         self.periodic_contour = True
+        self.shape = self.lattice.shape
 
     def BetaFunction(self):
         def fn(x):
